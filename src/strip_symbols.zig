@@ -111,13 +111,107 @@ pub fn main() !void {
     try ar_repack_argv.append("ar");
     try ar_repack_argv.append("rcs");
     try ar_repack_argv.append(output);
-    try ar_repack_argv.appendSlice(files_to_keep);
 
+    if (os == .windows) {
+        const rspfile_path = try std.fs.path.join(allocator, &.{ temp_dir, ".rspfile" });
+        const rspfile_at = try std.fmt.allocPrint(allocator, "@{s}", .{ rspfile_path });
+        {
+            var rspfile = try std.fs.cwd().createFile(rspfile_path, .{});
+            defer rspfile.close();
+            const writer = rspfile.writer();
+            try argvToCommandLineWindows(writer.any(), files_to_keep);
+        }
+
+        try ar_repack_argv.append("--rsp-quoting=windows");
+        try ar_repack_argv.append(rspfile_at);
+    } else {
+        try ar_repack_argv.appendSlice(files_to_keep);
+    }
+    
     const ar_repack = try std.process.Child.run(.{ .allocator = allocator, .argv = ar_repack_argv.items });
 
     if (ar_repack.term != .Exited or ar_repack.term.Exited != 0) {
         try std.io.getStdErr().writeAll(ar_repack.stderr);
         return error.ArError;
+    }
+}
+
+/// Serializes `argv` to a Windows command-line string suitable for passing to a child process and
+/// parsing by the `CommandLineToArgvW` algorithm. The caller owns the returned slice.
+fn argvToCommandLineWindows(
+    writer: std.io.AnyWriter,
+    argv: []const []const u8,
+) !void {
+    if (argv.len != 0) {
+        const arg0 = argv[0];
+
+        // The first argument must be quoted if it contains spaces or ASCII control characters
+        // (excluding DEL). It also follows special quoting rules where backslashes have no special
+        // interpretation, which makes it impossible to pass certain first arguments containing
+        // double quotes to a child process without characters from the first argument leaking into
+        // subsequent ones (which could have security implications).
+        //
+        // Empty arguments technically don't need quotes, but we quote them anyway for maximum
+        // compatibility with different implementations of the 'CommandLineToArgvW' algorithm.
+        //
+        // Double quotes are illegal in paths on Windows, so for the sake of simplicity we reject
+        // all first arguments containing double quotes, even ones that we could theoretically
+        // serialize in unquoted form.
+        var needs_quotes = arg0.len == 0;
+        for (arg0) |c| {
+            if (c <= ' ') {
+                needs_quotes = true;
+            } else if (c == '"') {
+                return error.InvalidArg0;
+            }
+        }
+        if (needs_quotes) {
+            try writer.writeByte('"');
+            try writer.writeAll(arg0);
+            try writer.writeByte('"');
+        } else {
+            try writer.writeAll(arg0);
+        }
+
+        for (argv[1..]) |arg| {
+            try writer.writeByte(' ');
+
+            // Subsequent arguments must be quoted if they contain spaces, tabs or double quotes,
+            // or if they are empty. For simplicity and for maximum compatibility with different
+            // implementations of the 'CommandLineToArgvW' algorithm, we also quote all ASCII
+            // control characters (again, excluding DEL).
+            needs_quotes = for (arg) |c| {
+                if (c <= ' ' or c == '"') {
+                    break true;
+                }
+            } else arg.len == 0;
+            if (!needs_quotes) {
+                try writer.writeAll(arg);
+                continue;
+            }
+
+            try writer.writeByte('"');
+            var backslash_count: usize = 0;
+            for (arg) |byte| {
+                switch (byte) {
+                    '\\' => {
+                        backslash_count += 1;
+                    },
+                    '"' => {
+                        try writer.writeByteNTimes('\\', backslash_count * 2 + 1);
+                        try writer.writeByte('"');
+                        backslash_count = 0;
+                    },
+                    else => {
+                        try writer.writeByteNTimes('\\', backslash_count);
+                        try writer.writeByte(byte);
+                        backslash_count = 0;
+                    },
+                }
+            }
+            try writer.writeByteNTimes('\\', backslash_count * 2);
+            try writer.writeByte('"');
+        }
     }
 }
 

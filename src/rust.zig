@@ -1,5 +1,19 @@
 const std = @import("std");
 
+pub const Profile = enum {
+    dev,
+    release,
+    @"test",
+    bench,
+
+    pub fn fromOptimizeMode(optimize: std.builtin.OptimizeMode) Profile {
+        return switch (optimize) {
+            .Debug => .dev,
+            else => .release,
+        };
+    }
+};
+
 pub const Target = struct {
     arch: Arch,
     vendor: Vendor,

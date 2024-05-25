@@ -136,15 +136,22 @@ pub fn main() !void {
 
         const filenames = message.filenames orelse @panic("expected 'compiler-artifact' to contains a list of filenames");
 
-        if (filenames.len != 1) {
-            @panic(try std.fmt.allocPrint(
-                allocator,
-                "expected only one artifact, got {any}",
-                .{std.json.fmt(filenames, .{})},
-            ));
+        var artifact_filename: ?[]const u8 = null;
+        for (filenames) |filename| {
+            if (std.mem.eql(u8, std.fs.path.extension(filename), ".rlib")) continue;
+
+            if (artifact_filename) |_| {
+                @panic(try std.fmt.allocPrint(
+                    allocator,
+                    "expected only one artifact, got {any}",
+                    .{std.json.fmt(filenames, .{})},
+                ));
+            } else {
+                artifact_filename = filename;
+            }
         }
 
-        const artifact = filenames[0];
+        const artifact = artifact_filename orelse @panic(try std.fmt.allocPrint(allocator, "expected one artifact, got none", .{}));
         const cwd = std.fs.cwd();
         std.log.debug("About to copy '{s}' '{s}'", .{ artifact, out_file.? });
         try std.fs.Dir.copyFile(cwd, artifact, cwd, out_file.?, .{});

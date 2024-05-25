@@ -1,6 +1,7 @@
 const std = @import("std");
 
-pub usingnamespace @import("src/root.zig");
+const root = @import("src/root.zig");
+pub usingnamespace root;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -80,13 +81,18 @@ const CargoConfig = struct {
     cargo_args: []const []const u8 = &.{},
 
     /// Target architecture.
-    /// If null, build.zig will use gnu ABI on Windows.
-    target: ?[]const u8 = null,
+    target: union(enum) {
+        host,
+        rust: []const u8,
+        zig: std.Build.ResolvedTarget,
+    },
+
+    profile: ?root.Profile = null,
 };
 
 /// See `addCargoBuildWithUserOptions` if you need to pass options to `b.dependency()`
 pub fn addCargoBuild(b: *std.Build, config: CargoConfig) std.Build.LazyPath {
-    return addCargoBuildWithUserOptions(b, config, .{});
+    return addCargoBuildWithUserOptions(b, config, .{ .optimize = .ReleaseSafe });
 }
 
 /// Adds all the steps and dependencies required to build a Rust crate.
@@ -118,19 +124,18 @@ pub fn addCargoBuildWithUserOptions(b: *std.Build, config: CargoConfig, args: an
 
     build_crab.addArg("--");
 
-    const zig_target = targetFromUserInputOptions(args);
+    const rust_target = switch (config.target) {
+        .rust => |rust_target| rust_target,
+        .host => b.fmt("{}", .{ root.Target.fromZig(b.host.result) catch @panic("unable to convert target triple to Rust") }),
+        .zig => |zig_target| b.fmt("{}", .{ root.Target.fromZig(zig_target.result) catch @panic("unable to convert target triple to Rust") }),
+    };
 
-    if (config.target) |target| {
-        build_crab.addArg("--target");
-        build_crab.addArg(target);
-    } else {
-        var target = zig_target;
-        if (zig_target.os.tag == .windows) {
-            target.abi = .gnu;
-        }
-        const rust_target = @This().Target.fromZig(target) catch @panic("unable to convert target triple to Rust");
-        build_crab.addArg("--target");
-        build_crab.addArg(b.fmt("{}", .{rust_target}));
+    build_crab.addArg("--target");
+    build_crab.addArg(rust_target);
+
+    if (config.profile) |profile| {
+        build_crab.addArg("--profile");
+        build_crab.addArg(profile);
     }
 
     build_crab.addArgs(config.cargo_args);
@@ -147,11 +152,13 @@ const StripSymbolsConfig = struct {
 
     /// List of symbols to remove from the archive
     symbols: []const []const u8,
+
+    os: std.Target.Os.Tag,
 };
 
 /// See `addStripSymbolsWithUserOptions` if you need to pass options to `b.dependency()`
 pub fn addStripSymbols(b: *std.Build, config: StripSymbolsConfig) std.Build.LazyPath {
-    return addStripSymbolsWithUserOptions(b, config, .{});
+    return addStripSymbolsWithUserOptions(b, config, .{ .optimize = .ReleaseSafe });
 }
 
 /// Re-packs a static library removing object files containing `config.symbols`.
@@ -177,24 +184,28 @@ pub fn addStripSymbolsWithUserOptions(b: *std.Build, config: StripSymbolsConfig,
     strip_symbols.addArg("--output");
     const out_file = strip_symbols.addOutputFileArg(config.name);
 
-    const zig_target = targetFromUserInputOptions(args);
     strip_symbols.addArg("--os");
-    strip_symbols.addArg(@tagName(zig_target.os.tag));
+    strip_symbols.addArg(@tagName(config.os));
 
     return out_file;
 }
 
 /// See `addRustStaticlibWithUserOptions` if you need to pass options to `b.dependency()`
 pub fn addRustStaticlib(b: *std.Build, config: CargoConfig) std.Build.LazyPath {
-    return addRustStaticlibWithUserOptions(b, config, .{});
+    return addRustStaticlibWithUserOptions(b, config, .{ .optimize = .ReleaseSafe });
 }
 
 /// A combination of `addCargoBuild` and `addStripSymbols` that strips `___chkstk_ms` on Windows.
 pub fn addRustStaticlibWithUserOptions(b: *std.Build, config: CargoConfig, args: anytype) std.Build.LazyPath {
     var crate_lib_path = addCargoBuildWithUserOptions(b, config, args);
 
-    const zig_target = targetFromUserInputOptions(args);
-    if (zig_target.os.tag == .windows) {
+    const should_strip_symbols = switch (config.target) {
+        .rust => |target| std.mem.endsWith(u8, target, "-windows-gnu"),
+        .host => b.host.result.os.tag == .windows and b.host.result.abi == .gnu,
+        .zig => |target| target.result.os.tag == .windows and target.result.abi == .gnu,
+    };
+
+    if (should_strip_symbols) {
         crate_lib_path = addStripSymbolsWithUserOptions(b, .{
             .name = config.name,
             .archive = crate_lib_path,
@@ -221,9 +232,9 @@ fn targetFromUserInputOptions(args: anytype) std.Target {
     return @import("builtin").target;
 }
 
-fn overrideTargetUserInput(args: anytype) @TypeOf(args) {
+fn overrideTargetUserInput(b: *std.Build, args: anytype) @TypeOf(args) {
     var new_args = args;
-    const host_target = @import("builtin").target;
+    const host_target = b.host;
     inline for (@typeInfo(@TypeOf(new_args)).Struct.fields) |field| {
         const v = &@field(new_args, field.name);
         const T = field.type;
