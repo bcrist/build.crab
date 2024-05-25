@@ -115,6 +115,18 @@ pub fn addCargoBuildWithUserOptions(b: *std.Build, config: CargoConfig, args: an
     _ = build_crab.addFileArg(config.manifest_path);
 
     const cargo_target = b.addWriteFiles();
+    var temp = std.ArrayList(u8).init(b.allocator);
+    try temp.writer().print("name: {s}\n", .{ config.name });
+    try temp.writer().print("zigbuild: {}\n", .{ config.zigbuild });
+    try temp.writer().print("cargo args: {}\n", .{ std.json.fmt(config.cargo_args, .{}) });
+    switch (config.target) {
+        .host => try temp.writer().print("target: .host\n", .{}),
+        .rust => |target| try temp.writer().print("target: .rust = {}\n", .{ target }),
+        .zig => |target| try temp.writer().print("target: .zig = {}\n", .{ std.json.fmt(target.result, .{}) }),
+    }
+    try temp.writer().print("profile: {?s}\n", .{ config.profile });
+    cargo_target.addBytesToSource(temp.items, "build.crab");
+    
     const target_dir = cargo_target.getDirectory();
     build_crab.addArg("--target-dir");
     build_crab.addDirectoryArg(target_dir);
@@ -172,17 +184,16 @@ pub fn addStripSymbolsWithUserOptions(b: *std.Build, config: StripSymbolsConfig,
     strip_symbols.addArg("--archive");
     strip_symbols.addFileArg(config.archive);
 
-    const temp_dir = b.addWriteFiles();
+    strip_symbols.addArg("--output");
+    const out_file = strip_symbols.addOutputFileArg(config.name);
+
     strip_symbols.addArg("--temp-dir");
-    strip_symbols.addDirectoryArg(temp_dir.getDirectory());
+    strip_symbols.addDirectoryArg(out_file.dirname());
 
     for (config.symbols) |symbol| {
         strip_symbols.addArg("--remove-symbol");
         strip_symbols.addArg(symbol);
     }
-
-    strip_symbols.addArg("--output");
-    const out_file = strip_symbols.addOutputFileArg(config.name);
 
     strip_symbols.addArg("--os");
     strip_symbols.addArg(@tagName(config.os));

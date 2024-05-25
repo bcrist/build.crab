@@ -59,7 +59,7 @@ pub fn main() !void {
     }
 
     const archive_path = archive_path_opt.?;
-    const temp_dir = temp_dir_opt.?;
+    const temp_dir = try std.fs.path.join(allocator, &.{ temp_dir_opt.?, "obj" });
     const output = output_opt.?;
     const os = if (os_opt) |os_str|
         std.meta.stringToEnum(std.Target.Os.Tag, os_str) orelse std.debug.panic("os {s} not recognized", .{os_str})
@@ -86,6 +86,8 @@ pub fn main() !void {
         try doNothing(archive_path, output);
         return;
     }
+
+    try std.fs.cwd().deleteTree(temp_dir);
 
     const ar_extract = try std.process.Child.run(.{ .allocator = allocator, .argv = &[_][]const u8{
         "zig",
