@@ -99,7 +99,7 @@ pub fn addCargoBuild(b: *std.Build, config: CargoConfig) std.Build.LazyPath {
 /// The crate must produce only one artifact (meaning shared libraries are not yet supported).
 /// If you need more flexibility, `build_crab` artifact can be used directly.
 pub fn addCargoBuildWithUserOptions(b: *std.Build, config: CargoConfig, args: anytype) std.Build.LazyPath {
-    const dep_args = overrideTargetUserInput(args);
+    const dep_args = overrideTargetUserInput(b, args);
     const @"build.crab" = b.dependency("build.crab", dep_args);
     const build_crab = b.addRunArtifact(@"build.crab".artifact("build_crab"));
 
@@ -135,7 +135,7 @@ pub fn addCargoBuildWithUserOptions(b: *std.Build, config: CargoConfig, args: an
 
     if (config.profile) |profile| {
         build_crab.addArg("--profile");
-        build_crab.addArg(profile);
+        build_crab.addArg(@tagName(profile));
     }
 
     build_crab.addArgs(config.cargo_args);
@@ -165,7 +165,7 @@ pub fn addStripSymbols(b: *std.Build, config: StripSymbolsConfig) std.Build.Lazy
 /// Only Windows is supported, does nothing on other systems.
 /// If you need more flexibility, `strip_symbols` artifact can be used directly.
 pub fn addStripSymbolsWithUserOptions(b: *std.Build, config: StripSymbolsConfig, args: anytype) std.Build.LazyPath {
-    const dep_args = overrideTargetUserInput(args);
+    const dep_args = overrideTargetUserInput(b, args);
     const @"build.crab" = b.dependency("build.crab", dep_args);
     const strip_symbols = b.addRunArtifact(@"build.crab".artifact("strip_symbols"));
 
@@ -212,6 +212,7 @@ pub fn addRustStaticlibWithUserOptions(b: *std.Build, config: CargoConfig, args:
             .symbols = &.{
                 "___chkstk_ms",
             },
+            .os = .windows,
         }, args);
     }
     return crate_lib_path;
