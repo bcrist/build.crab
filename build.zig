@@ -116,16 +116,16 @@ pub fn addCargoBuildWithUserOptions(b: *std.Build, config: CargoConfig, args: an
 
     const cargo_target = b.addWriteFiles();
     var temp = std.ArrayList(u8).init(b.allocator);
-    try temp.writer().print("name: {s}\n", .{ config.name });
-    try temp.writer().print("zigbuild: {}\n", .{ config.zigbuild });
-    try temp.writer().print("cargo args: {}\n", .{ std.json.fmt(config.cargo_args, .{}) });
+    temp.writer().print("name: {s}\n", .{ config.name }) catch @panic("OOM");
+    temp.writer().print("zigbuild: {}\n", .{ config.zigbuild }) catch @panic("OOM");
+    temp.writer().print("cargo args: {}\n", .{ std.json.fmt(config.cargo_args, .{}) }) catch @panic("OOM");
     switch (config.target) {
-        .host => try temp.writer().print("target: .host\n", .{}),
-        .rust => |target| try temp.writer().print("target: .rust = {}\n", .{ target }),
-        .zig => |target| try temp.writer().print("target: .zig = {}\n", .{ std.json.fmt(target.result, .{}) }),
+        .host => temp.writer().print("target: .host\n", .{}) catch @panic("OOM"),
+        .rust => |target| temp.writer().print("target: .rust = {s}\n", .{ target }) catch @panic("OOM"),
+        .zig => |target| temp.writer().print("target: .zig = {s}\n", .{ target.result.zigTriple(b.allocator) catch @panic("OOM") }) catch @panic("OOM"),
     }
-    try temp.writer().print("profile: {?s}\n", .{ config.profile });
-    cargo_target.addBytesToSource(temp.items, "build.crab");
+    temp.writer().print("profile: {?}\n", .{ config.profile }) catch @panic("OOM");
+    _ = cargo_target.add("build.crab", temp.items);
     
     const target_dir = cargo_target.getDirectory();
     build_crab.addArg("--target-dir");
@@ -184,16 +184,19 @@ pub fn addStripSymbolsWithUserOptions(b: *std.Build, config: StripSymbolsConfig,
     strip_symbols.addArg("--archive");
     strip_symbols.addFileArg(config.archive);
 
-    strip_symbols.addArg("--output");
-    const out_file = strip_symbols.addOutputFileArg(config.name);
+    const temp = b.addWriteFiles();
+    const copied_archive = temp.addCopyFile(config.archive, "archive");
 
     strip_symbols.addArg("--temp-dir");
-    strip_symbols.addDirectoryArg(out_file.dirname());
+    strip_symbols.addDirectoryArg(copied_archive.dirname());
 
     for (config.symbols) |symbol| {
         strip_symbols.addArg("--remove-symbol");
         strip_symbols.addArg(symbol);
     }
+    
+    strip_symbols.addArg("--output");
+    const out_file = strip_symbols.addOutputFileArg(config.name);
 
     strip_symbols.addArg("--os");
     strip_symbols.addArg(@tagName(config.os));
