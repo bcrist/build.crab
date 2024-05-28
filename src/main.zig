@@ -1,4 +1,5 @@
 const std = @import("std");
+const DepTokenizer = @import("DepTokenizer.zig");
 
 fn printUsage() !void {
     try std.io.getStdOut().writeAll(
@@ -156,7 +157,7 @@ pub fn main() !void {
         std.log.debug("About to copy '{s}' '{s}'", .{ artifact, out_file.? });
         try std.fs.Dir.copyFile(cwd, artifact, cwd, out_file.?, .{});
 
-        if (deps_file) |path| {
+        if (deps_file) |dep_file_path| {
             const dot = std.mem.lastIndexOfScalar(u8, artifact, '.');
             const basename = if (dot) |until_extension|
                 artifact[0..until_extension]
@@ -165,8 +166,37 @@ pub fn main() !void {
 
             const artifact_d = try std.mem.concat(allocator, u8, &.{ basename, ".d" });
             defer allocator.free(artifact_d);
-            std.log.debug("About to copy '{s}' '{s}'", .{ artifact_d, path });
-            try std.fs.Dir.copyFile(cwd, artifact_d, cwd, path, .{});
+            std.log.debug("About to copy '{s}' '{s}'", .{ artifact_d, dep_file_path });
+
+            // Rust on Windows can generate depfiles that escape spaces in a way that zig doesn't understand.  So here we attempt to fix that:
+            const dep_file_contents = try cwd.readFileAlloc(allocator, artifact_d, 10_000_000);
+
+            var f = try cwd.createFile(dep_file_path, .{});
+            defer f.close();
+            const writer = f.writer();
+
+            var it: DepTokenizer = .{ .bytes = dep_file_contents };
+            while (it.next()) |token| switch (token) {
+                .target, .target_must_resolve => |raw_path| {
+                    try writer.writeByte('\n');
+                    try writer.writeAll(raw_path);
+                    try writer.writeByte(':');
+                },
+                .prereq => |raw_path| {
+                    try writer.writeByte(' ');
+                    try writer.writeAll(raw_path);
+                },
+                .prereq_must_resolve => {
+                    try writer.writeAll(" \"");
+                    try token.resolve(writer);
+                    try writer.writeAll("\"");
+                },
+                else => {
+                    const stderr = std.io.getStdErr().writer();
+                    try stderr.writeAll("Failed to parse depfile: ");
+                    try token.printError(stderr);
+                },
+            };
         }
 
         break;
